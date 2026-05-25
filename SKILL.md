@@ -1,6 +1,6 @@
 ---
 name: vault-sync
-description: Ingestion agent that writes the current chat session into the right project files — and bootstraps the full vault structure (CLAUDE.md, wiki/hot.md, wiki/index.md, wiki/log.md) if none of it exists yet. Use this skill at the end of any working session to ensure nothing is lost. Triggers on: "vault-sync", "sync the vault", "update the files", "ingest this conversation", "save what we discussed", "update hot.md", "end of session sync", "write to the wiki", "crystallize this session", "sync the wiki", or any time the user wants session knowledge persisted to disk before clearing context. Also trigger when user says "before I clear" or "wrap up the files". Two modes: BOOTSTRAP (vault doesn't exist yet) and SYNC (vault exists, update it from this session).
+description: 'Ingestion agent that writes the current chat session into the right project files, and bootstraps the full vault structure (CLAUDE.md, wiki/hot.md, wiki/index.md, wiki/log.md) if none of it exists yet. Use this skill at the end of any working session to ensure nothing is lost. Triggers on vault-sync, sync the vault, update the files, ingest this conversation, save what we discussed, update hot.md, end of session sync, write to the wiki, crystallize this session, sync the wiki, or any time the user wants session knowledge persisted to disk before clearing context. Also trigger when user says before I clear or wrap up the files. Two modes, BOOTSTRAP (vault does not exist yet) and SYNC (vault exists, update it from this session).'
 ---
 
 # vault-sync
