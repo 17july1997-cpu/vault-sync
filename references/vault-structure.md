@@ -108,6 +108,7 @@ Overwrite entirely on every SYNC. Never append. Load only when the user asks "wh
 ---
 type: session-handoff
 title: Last Session Handoff
+description: "Load only when the user asks what happened last session or needs to resume after a break. Overwritten every SYNC."
 updated: YYYY-MM-DD HH:MM
 ---
 
