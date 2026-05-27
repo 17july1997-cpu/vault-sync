@@ -255,6 +255,7 @@ vault-sync estimate — [vault-name]
 Mode: Sync
 wiki pages in index: N
 Manifest detected: [yes / no]
+Compacts since last clear: N (from .vault-session-state.yaml, see S0.3)
 Estimated pages to read: N (based on candidate scope and index size)
 Estimated pages to write: N (hot.md, session-handoff.md, [reasoning.md,] + routing targets)
 Approximate token range: LOW–HIGH
@@ -263,6 +264,38 @@ Proceed? [Enter to continue / type 'n' to cancel]
 ```
 
 Wait for explicit user confirmation. If the user cancels, stop here.
+
+The `Compacts since last clear` field is populated by Step S0.3, which runs immediately after this preview is shown. On the very first run after the compact-awareness feature ships, the state file will not exist yet and this line will read `Compacts since last clear: 0 (state file initializing)`.
+
+### Step S0.3: Compact Detection + State Update
+
+Runs immediately after S0, before any other reads or writes. Purpose: track how many `/compact` operations have accumulated in this session so Step S9.5 can warn when quality is at risk.
+
+**State file:** `.vault-session-state.yaml` at vault root (operational, never human-facing — see Hard Rule 12). Schema:
+
+```yaml
+compact_count: 0
+last_seen_compact_fingerprints: []  # short hashes of compact-marker blocks already counted
+last_updated: 2026-05-27T00:00:00Z
+last_warning_fired: null  # ISO timestamp of most recent clear-not-compact warning, or null
+marker_pattern_matched: "Previous conversation was compacted"  # records which marker text was detected, for forward-compat
+```
+
+**Logic:**
+
+1. **Load state.** Read `.vault-session-state.yaml` if it exists. If missing or malformed, initialize defaults in memory (`compact_count: 0`, empty fingerprint list).
+
+2. **Scan context for compact markers.** Look in the current conversation context for compact-summary markers. Primary literal: `Previous conversation was compacted`. Also accept close variants (e.g., `conversation was compacted`, `compacted conversation summary`) — Claude Code's exact wording may evolve. Record whichever variant matched in `marker_pattern_matched` so the brittleness is visible if it breaks.
+
+3. **Fingerprint each marker.** For each marker block found, compute a short hash: first 12 characters of SHA-256 over the marker line plus ~200 characters of surrounding context (enough to make each compact event unique).
+
+4. **Increment counter for new markers only.** For each fingerprint NOT present in `last_seen_compact_fingerprints`: increment `compact_count` by 1 and append the fingerprint to the list. This makes the step idempotent — running vault-sync twice in one session does not double-count.
+
+5. **Detect /clear.** If the current conversation appears fresh (no prior assistant turns visible in context, no compact markers detected, only the current user prompt and system messages) AND `compact_count > 0`: assume the user ran `/clear`. Reset `compact_count` to 0, clear `last_seen_compact_fingerprints`. Leave `last_warning_fired` as historical record. Note "/clear detected — counter reset" in the S9 report.
+
+6. **Write state back.** Save updated `.vault-session-state.yaml` with `last_updated` set to now (ISO 8601).
+
+7. **Backfill token preview.** Update the `Compacts since last clear: N` line in the S0 preview output with the current count.
 
 ### Step S0.5: Stale File Detection
 
@@ -515,6 +548,59 @@ After the report, output ONE of the following. Do not output multiple. Do not ou
 
 The lint threshold is NOT "any new page was created." It is "substantive pages created AND no recent lint." Firing on every run trains the user to ignore it.
 
+### Step S9.5: Clear-Not-Compact Banner (compact-aware)
+
+Runs immediately after S9, as the final user-facing output. Purpose: when 4+ compacts have accumulated in this session, tell the user to `/clear` instead of `/compact` next, and hand them a paste-ready resume prompt for the fresh session.
+
+**Trigger:** `compact_count >= 4` (from `.vault-session-state.yaml`, updated in S0.3).
+
+If the trigger does not fire, output nothing and end the run.
+
+**When triggered:**
+
+1. Read the freshly-written `wiki/hot.md` and `wiki/session-handoff.md` (just written in S6 and S6.5, so they reflect current session truth).
+
+2. Extract four fields:
+   - **Active focus**: first line under hot.md's "Active Focus" / "Current Focus" section
+   - **Last decision**: most recent entry in hot.md's "Active Decisions" / "Recent Decisions" section
+   - **Open thread**: first unresolved item from session-handoff.md's "Open Questions" / "Open Threads" section (or "none" if blank)
+   - **Next action**: from session-handoff.md's "Pickup Point" / "Next Action" section
+
+3. Output the following banner verbatim, with the four bracketed fields filled in from step 2 and N replaced with the current `compact_count`. Do NOT write this banner to any file — it is user-facing output only.
+
+```
+================================================================
+STOP COMPACTING — TIME TO /clear
+================================================================
+You've accumulated N compacts in this session. Quality degrades
+past 4 consecutive compacts (cache misses + summarization drift).
+
+NEXT ACTION:
+1. Run /clear (not /compact)
+2. Paste the resume prompt below into the fresh session
+
+----------------------------------------------------------------
+RESUME PROMPT (copy everything below this line):
+----------------------------------------------------------------
+
+Read wiki/session-handoff.md for full prior-session context.
+Current state snapshot:
+  - Active focus: [active focus from hot.md]
+  - Last decision: [last decision from hot.md]
+  - Open thread: [open thread from session-handoff.md]
+  - Next action: [next action from session-handoff.md]
+Continue from the pickup point above.
+
+----------------------------------------------------------------
+This warning will keep appearing on every vault-sync until /clear
+is detected. Counter resets to 0 after /clear.
+================================================================
+```
+
+4. Update `last_warning_fired` to the current ISO 8601 timestamp in `.vault-session-state.yaml`. Do NOT touch `compact_count` — it only resets on detected `/clear` (Hard Rule 13).
+
+**Do not reprint full session-handoff.md content.** The resume prompt points to the file; the four-field snapshot is the only freshly-synthesized content.
+
 ---
 
 ## Hard Rules
@@ -530,6 +616,8 @@ The lint threshold is NOT "any new page was created." It is "substantive pages c
 9. **reasoning.md and log.md self-compress at 400 / 150 lines.** Archives in `wiki/reasoning_archive/` and `wiki/log_archive/`, indexed under `## Archives` in index.md. Archives are never deleted. reasoning.md retains the 8 most recent entries live.
 10. **Token preview is mandatory at every run start (B0 / S0).** Never bypass. User must confirm before reads or writes.
 11. **Manifest is consulted, not bypassed.** S0.5 always runs in Sync mode. B0.5 always runs in Bootstrap mode.
+12. **`.vault-session-state.yaml` is operational, never human-facing.** Never link to it from index.md, never quote its contents in user reports beyond the one-line compact count in the S0 token preview. It is not a wiki page.
+13. **`compact_count` resets ONLY on detected `/clear` (S0.3 step 5).** Never reset on warning fire, never reset manually inside the sync pipeline. The S9.5 warning is designed to persist until the user actually clears, which is the whole point of the feature.
 
 ---
 
